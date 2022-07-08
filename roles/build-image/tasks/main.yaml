@@ -1,0 +1,97 @@
+---
+
+- name: start application
+  block:
+    - name: ensure tmp working directory exists
+      file:
+        path: 'tmp/'
+        state: directory
+        mode: 0770
+
+    - name: Download configuration file for application
+      ansible.builtin.get_url:
+        url: http://localhost:6161/api/applications/conversation-app
+        dest: tmp/app.conf
+        mode: '0770'
+
+    - name: resister the application config as a variable
+      shell: cat tmp/app.conf
+      register: appConfig
+
+    - name: output config file
+      debug:
+        msg: '{{ appConfig }}'
+
+    - name: save the app config Json data to a Variable as a Fact
+      set_fact:
+        appConfigJson: "{{ appConfig.stdout | from_json }}"
+
+    - name: process the json config to extract config variables
+      set_fact:
+        containerPort: "{{ appConfigJson | json_query('config.ports[0].containerPort') }}"
+        hostPort: "{{ appConfigJson | json_query('config.ports[0].hostPort') }}"
+        image_to_start: "{{ appConfigJson | json_query('image') }}"
+        endpoint: "{{ appConfigJson | json_query('endpoint') }}"
+
+    - name: build and run container using config provide
+      docker_container:
+        image: '{{ image_to_start }}'
+        name: say-hello
+        ports:
+          - '{{hostPort}}:{{containerPort}}'
+        state: started
+
+    - name: Sleep for 5 seconds while container comes up (TODO - change to be status)
+      ansible.builtin.wait_for:
+        timeout: 5
+      delegate_to: localhost
+
+    - name: get container info
+      docker_container_info:
+        name: say-hello
+      register: result
+
+    - name: check container status
+      debug:
+        msg: 'container status [exists={{ result.exists }}, status={{ result.container.State.Status }}]'
+
+    - name: call application end point and save response json
+      ansible.builtin.get_url:
+        url: 'http://localhost:{{hostPort}}{{endpoint}}'
+        dest: tmp/reponse.json
+        mode: '0440'
+      retries: 5
+      delay: 10
+
+    - name: resister the response as a variable
+      shell: cat tmp/reponse.json
+      register: result
+
+    - name: output response file
+      debug:
+        msg: '{{ result }}'
+
+    - name: save the Json data to a Variable as a Fact
+      set_fact:
+        jsondata: "{{ result.stdout | from_json }}"
+
+    - name: check that the json response contains a object called message with a value of 'Hello'
+      set_fact:
+        message: "{{ jsondata | json_query('message') }}"
+      failed_when: >
+        ('Hello' not in message)
+
+  always:
+
+    - name: stop container
+      docker_container:
+        image: '{{ image_to_start }}'
+        name: say-hello
+        ports:
+          - '{{hostPort}}:{{containerPort}}'
+        state: absent
+
+    - name: delete the tmp working directory
+      file:
+        path: tmp/
+        state: absent

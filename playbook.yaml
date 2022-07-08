@@ -1,0 +1,9 @@
+---
+
+- name: start conversation
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: build-image
+
+
